@@ -90,7 +90,7 @@ try {
 async function loadTemplateImages() {
   try {
     const mascotTemplate = await readFile(path.join(__dirname, 'mascot-template.png'));
-    const tokenMetricsLogo = await readFile(path.join(__dirname, 'tokenmetrics-logo.png'));
+    const tokenMetricsLogo = await readFile(path.join(__dirname, 'TM_logo_primary_white.png'));
     return {
       mascotTemplate,
       tokenMetricsLogo
