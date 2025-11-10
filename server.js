@@ -25,7 +25,7 @@ const envSchema = {
   type: 'object',
   required: ['PORT', 'SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'GEMINI_API_KEY'],
   properties: {
-    PORT: { type: 'string', default: '3000' },
+    PORT: { type: 'string', default: '0110' },
     HOST: { type: 'string', default: '0.0.0.0' },
     LOG_LEVEL: { type: 'string', default: 'info' },
     SLACK_BOT_TOKEN: { type: 'string' },
