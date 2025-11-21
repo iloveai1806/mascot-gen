@@ -7,7 +7,12 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node test.js"
+    "test": "node test.js",
+    "test-crypto": "node test-crypto.js",
+    "test-podium": "node test-podium.js",
+    "test-header-date": "node test-header-date.js",
+    "test-new-sdk": "node test-new-sdk.js",
+    "debug-genai": "node debug-genai.js"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
@@ -19,7 +24,8 @@
     "node-fetch": "^3.3.2",
     "pino": "^8.16.2",
     "pino-pretty": "^10.2.3",
-    "@slack/web-api": "^6.12.0"
+    "@slack/web-api": "^6.12.0",
+    "@google/genai": "^1.29.0"
   },
   "devDependencies": {
     "@types/node": "^20.8.0"

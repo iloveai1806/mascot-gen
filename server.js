@@ -9,6 +9,7 @@ import { readFile } from 'fs/promises';
 import fetch from 'node-fetch';
 import { WebClient } from '@slack/web-api';
 import { mkdir, writeFile } from 'fs/promises';
+import { GoogleGenAI } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,8 +58,9 @@ await fastify.register(staticPlugin, {
 // Initialize Slack client
 const slackClient = new WebClient(fastify.config.SLACK_BOT_TOKEN);
 
-// Gemini API configuration
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
+// Initialize Gemini client
+const geminiClient = new GoogleGenAI({ apiKey: fastify.config.GEMINI_API_KEY });
+
 
 // Simple concurrency tracking
 let activeRequests = 0;
@@ -101,86 +103,291 @@ async function loadTemplateImages() {
   }
 }
 
-// Generate enhanced prompt for Token Metrics mascot
-function generateEnhancedPrompt(userPrompt) {
-  return `TMAI ${userPrompt}
 
-Instructions:
-- Follow the user's prompt exactly: "${userPrompt}"
-- Use the provided mascot template as the base character
-- Place the Token Metrics logo in the top left corner of the image
-- Keep the style, and details of the mascot strictly, don't change it unless specify by the users. That's our mascot.
-`;
+// Convert buffer to generative part for new SDK
+function bufferToGenerativePart(buffer, mimeType) {
+  return {
+    inlineData: {
+      data: buffer.toString('base64'),
+      mimeType
+    }
+  };
 }
 
-// Generate image using Gemini API via HTTP request
-async function generateImageWithGemini(prompt, templateImages) {
+// Load Ian Balina image and Token Metrics logo
+async function loadIanBalinaImages() {
   try {
-    // Create the enhanced prompt
-    const enhancedPrompt = generateEnhancedPrompt(prompt);
+    const ianBalinaImage = await readFile(path.join(__dirname, 'ian-balina-bg-removed.png'));
+    const tokenMetricsLogo = await readFile(path.join(__dirname, 'TM_logo_primary_white.png'));
+    return {
+      ianBalinaImage,
+      tokenMetricsLogo
+    };
+  } catch (error) {
+    fastify.log.error('Failed to load Ian Balina images:', error);
+    throw error;
+  }
+}
 
-    // Prepare content for Gemini - include template images as context
+// Generate image featuring Ian Balina using new Google GenAI SDK
+async function generateIanBalinaImage(prompt, ianImages, ratio = "16:9") {
+  try {
+    console.log('🎨 Generating Ian Balina image with Gemini 3 Pro...');
+    console.log(`📝 Prompt: ${prompt}`);
+    console.log(`📐 Ratio: ${ratio}`);
+
+    // Create enhanced prompt for Ian Balina
+    const enhancedPrompt = `You are a professional designer for Token Metrics, specializing in creating high-quality, brand-consistent visuals featuring Ian Balina, CEO and Founder of Token Metrics.
+
+User Request: "Ian Balina ${prompt}"
+
+Design Requirements:
+- Execute the user's creative direction precisely as specified
+- Use the provided Ian Balina image as the foundation - maintain his exact appearance, style, and likeness
+- Feature Ian Balina prominently as the main subject
+- Position the Token Metrics logo prominently in the top left corner of the image
+- Maintain professional quality suitable for official company use
+- Create imagery that reflects Ian's role as CEO and Founder of Token Metrics
+
+Style Standards:
+- Keep Ian Balina's appearance strictly unchanged unless the user explicitly requests modifications
+- Maintain Token Metrics' professional brand aesthetic
+- Ensure visual coherence between all elements
+- Create polished, publication-ready imagery
+- Focus on leadership, expertise, and innovation themes appropriate for a CEO and Founder
+`;
+
+    // Prepare content with Ian Balina image and Token Metrics logo using new SDK format
     const contents = [
-      {
-        parts: [
-          { text: enhancedPrompt },
-          {
-            inline_data: {
-              mime_type: 'image/png',
-              data: templateImages.mascotTemplate.toString('base64')
-            }
-          },
-          {
-            inline_data: {
-              mime_type: 'image/png',
-              data: templateImages.tokenMetricsLogo.toString('base64')
-            }
-          }
-        ]
-      }
+      bufferToGenerativePart(ianImages.ianBalinaImage, 'image/png'),
+      bufferToGenerativePart(ianImages.tokenMetricsLogo, 'image/png'),
+      { text: enhancedPrompt }
     ];
 
-    const requestBody = {
+    // Generate image using new SDK with gemini-3-pro-image-preview
+    const response = await geminiClient.models.generateContent({
+      model: 'gemini-3-pro-image-preview',
       contents: contents,
       generationConfig: {
         responseModalities: ['Image'],
         imageConfig: {
-          aspectRatio: '1:1'
+          aspectRatio: ratio
         }
       }
-    };
-
-    // Make HTTP request to Gemini API
-    const response = await fetch(`${GEMINI_API_URL}?key=${fastify.config.GEMINI_API_KEY}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(requestBody)
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Gemini API error ${response.status}: ${errorText}`);
-    }
+    console.log('✅ Ian Balina image generation completed');
 
-    const result = await response.json();
-
-    // Extract image data from response
-    if (result.candidates && result.candidates.length > 0) {
-      const candidate = result.candidates[0];
-
-      if (candidate.content && candidate.content.parts) {
-        for (const part of candidate.content.parts) {
-          if (part.inlineData && part.inlineData.data) {
-            return Buffer.from(part.inlineData.data, 'base64');
-          }
-        }
+    // Extract image data from new SDK response format
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        console.log('✅ Image data extracted from response');
+        return Buffer.from(part.inlineData.data, 'base64');
       }
     }
 
-    throw new Error('No image data received from Gemini API');
+    throw new Error('No image data found in response');
+
   } catch (error) {
+    console.error('❌ Error generating Ian Balina image:', error.message);
+    throw error;
+  }
+}
+
+// Parse flags from user prompt for Ian Balina commands
+function parseIanPromptWithFlags(commandText) {
+  // Supported aspect ratios
+  const supportedRatios = ["1:1", "3:4", "4:3", "9:16", "16:9"];
+
+  // Check for --ratio flag and extract the ratio value
+  const ratioMatch = commandText.match(/--ratio\s+([^\s]+)/);
+  let ratio = "16:9"; // default ratio
+
+  if (ratioMatch) {
+    const requestedRatio = ratioMatch[1];
+    if (supportedRatios.includes(requestedRatio)) {
+      ratio = requestedRatio;
+    } else {
+      console.log(`⚠️ Unsupported ratio "${requestedRatio}", using default "16:9"`);
+    }
+  }
+
+  // Remove flags from prompt to get clean text
+  const cleanPrompt = commandText.replace(/--\w+\s*([^\s]*)?/g, '').trim();
+
+  return {
+    prompt: cleanPrompt,
+    ratio: ratio
+  };
+}
+
+// Handle slash command /ian
+async function handleIanSlashCommand(commandText, channelId, userId) {
+  try {
+    fastify.log.info('Received /ian command:', { commandText, channelId, userId });
+
+    // Parse prompt and flags
+    const { prompt, ratio } = parseIanPromptWithFlags(commandText);
+
+    if (!prompt) {
+      return {
+        text: '❌ Please provide a description for the Ian Balina image you\'d like me to generate!\n\nExample: `/ian presenting at blockchain conference`\n\n💡 Use `--ratio <ratio>` to set aspect ratio (1:1, 3:4, 4:3, 9:16, 16:9)!',
+        response_type: 'ephemeral'
+      };
+    }
+
+    // Get user info for personalized response
+    let userName = 'there';
+    try {
+      const userInfo = await slackClient.users.info({ user: userId });
+      userName = userInfo.user?.real_name || userInfo.user?.name || 'there';
+    } catch (error) {
+      // Continue with default name if user lookup fails
+    }
+
+    // Random working messages
+    const workingMessages = [
+      `Creating Ian Balina masterpiece...`,
+      `Consulting with Ian's vision...`,
+      `Crafting leadership imagery...`,
+      `Designing founder moments...`,
+      `Ian Balina is choosing his pose...`,
+      `Token Metrics CEO mode activated...`,
+      `Preparing innovation showcase...`,
+      `Designing blockchain brilliance...`,
+      `Crafting crypto excellence...`,
+      `Ian Balina is reviewing the scene...`,
+      `Token Metrics founder magic...`,
+      `Creating visionary content...`,
+      `Ian Balina is getting ready...`,
+      `Leadership in focus...`,
+      `Token Metrics artistry...`
+    ];
+
+    const randomMessage = `Hang on ${userName}... ${workingMessages[Math.floor(Math.random() * workingMessages.length)]}`;
+
+    // Return immediate response acknowledging the command
+    const response = await slackClient.chat.postMessage({
+      channel: channelId,
+      text: randomMessage
+    });
+
+    const threadTs = response.ts;
+
+    // Process asynchronously with concurrency limit
+    setTimeout(async () => {
+      try {
+        await processWithConcurrencyLimit(async () => {
+          // Load Ian Balina images
+          const ianImages = await loadIanBalinaImages();
+
+          // Generate image with specified ratio
+          const imageBuffer = await generateIanBalinaImage(prompt, ianImages, ratio);
+
+          // Save image
+          const savedImage = await saveGeneratedImage(imageBuffer, `ian-balina-${prompt}`);
+
+          // Create title and comment
+          const title = `Ian Balina ${prompt} (${ratio})`;
+          const comment = `✨ Generated Ian Balina ${prompt} with ${ratio} aspect ratio`;
+
+          // Upload image to Slack thread
+          await slackClient.files.uploadV2({
+            channel_id: channelId,
+            file: imageBuffer,
+            filename: savedImage.filename,
+            title: title,
+            initial_comment: comment,
+            thread_ts: threadTs
+          });
+        });
+      } catch (error) {
+        await slackClient.chat.postMessage({
+          channel: channelId,
+          text: `❌ ${error.message}`,
+          thread_ts: threadTs
+        });
+      }
+    }, 100);
+
+    // Return empty response to avoid duplicate messages
+    return '';
+
+  } catch (error) {
+    fastify.log.error('Error in handleIanSlashCommand:', error);
+    return {
+      text: `❌ An unexpected error occurred: ${error.message}`,
+      response_type: 'ephemeral'
+    };
+  }
+}
+
+// Generate image using new Google GenAI SDK
+async function generateImageWithGemini(prompt, templateImages, ratio = "16:9") {
+  try {
+    console.log('🎨 Generating mascot image with Gemini 3 Pro...');
+    console.log(`📝 Prompt: ${prompt}`);
+    console.log(`📐 Ratio: ${ratio}`);
+
+    // Create enhanced prompt
+    const enhancedPrompt = `
+You are a professional designer for Token Metrics, specializing in creating high-quality, brand-consistent visuals for marketing and communications.
+
+User Request: "TMAI ${prompt}"
+
+Design Requirements:
+- Execute the user's creative direction precisely as specified
+- Use the provided TMAI mascot image (Token Metrics' official mascot) as the foundation - maintain its exact appearance, style, and character design
+- Position the Token Metrics logo prominently in the top left corner
+- Ensure both the TMAI mascot and Token Metrics logo are the primary focal points
+- Maintain professional quality suitable for official company use
+
+Crypto Asset Guidelines:
+- When incorporating cryptocurrency logos or symbols, only use well-known, accurately recognizable crypto brands (Bitcoin, Ethereum, Solana, DOGE, BNB, ADA..)
+- DO NOT create fictional or hallucinated crypto logos
+- If unsure about a specific crypto asset's visual identity, substitute with generic professional elements (charts, data visualizations, abstract tech patterns)
+- Prioritize authenticity and accuracy over creative interpretation for brand assets
+
+Style Standards:
+- Keep the mascot's design strictly unchanged unless the user explicitly requests modifications
+- Maintain Token Metrics' professional brand aesthetic
+- Ensure visual coherence between all elements
+- Create polished, publication-ready imagery
+`;
+
+    // Prepare content with template images using new SDK format
+    const contents = [
+      bufferToGenerativePart(templateImages.mascotTemplate, 'image/png'),
+      bufferToGenerativePart(templateImages.tokenMetricsLogo, 'image/png'),
+      { text: enhancedPrompt }
+    ];
+
+    // Generate image using new SDK with gemini-3-pro-image-preview
+    const response = await geminiClient.models.generateContent({
+      model: 'gemini-3-pro-image-preview',
+      contents: contents,
+      generationConfig: {
+        responseModalities: ['Image'],
+        imageConfig: {
+          aspectRatio: ratio
+        }
+      }
+    });
+
+    console.log('✅ Image generation completed');
+
+    // Extract image data from new SDK response format
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        console.log('✅ Image data extracted from response');
+        return Buffer.from(part.inlineData.data, 'base64');
+      }
+    }
+
+    throw new Error('No image data found in response');
+
+  } catch (error) {
+    console.error('❌ Error generating image:', error.message);
     throw error;
   }
 }
@@ -199,17 +406,46 @@ async function saveGeneratedImage(imageBuffer, userPrompt) {
   };
 }
 
+// Parse flags from user prompt
+function parsePromptWithFlags(commandText) {
+  // Supported aspect ratios
+  const supportedRatios = ["1:1", "3:4", "4:3", "9:16", "16:9"];
+
+  // Check for --ratio flag and extract the ratio value
+  const ratioMatch = commandText.match(/--ratio\s+([^\s]+)/);
+  let ratio = "16:9"; // default ratio
+
+  if (ratioMatch) {
+    const requestedRatio = ratioMatch[1];
+    if (supportedRatios.includes(requestedRatio)) {
+      ratio = requestedRatio;
+    } else {
+      console.log(`⚠️ Unsupported ratio "${requestedRatio}", using default "16:9"`);
+    }
+  }
+
+  // Remove flags from prompt to get clean text
+  const cleanPrompt = commandText.replace(/--\w+\s*([^\s]*)?/g, '').trim();
+
+  return {
+    prompt: cleanPrompt,
+    ratio: ratio
+  };
+}
+
+
+
 // Handle slash command /tmai
 async function handleTMAISlashCommand(commandText, channelId, userId) {
   try {
     fastify.log.info('Received /tmai command:', { commandText, channelId, userId });
 
-    // Clean and validate the prompt
-    const userPrompt = commandText.trim();
+    // Parse prompt and flags
+    const { prompt, ratio } = parsePromptWithFlags(commandText);
 
-    if (!userPrompt) {
+    if (!prompt) {
       return {
-        text: '❌ Please provide a description for the mascot you\'d like me to generate!\n\nExample: `/tmai A robot mascot analyzing cryptocurrency charts on a computer screen`',
+        text: '❌ Please provide a description for the mascot you\'d like me to generate!\n\nExample: `/tmai A robot mascot analyzing cryptocurrency charts on a computer screen`\n\n💡 Use `--ratio <ratio>` to set aspect ratio (1:1, 3:4, 4:3, 9:16, 16:9)!',
         response_type: 'ephemeral'
       };
     }
@@ -264,19 +500,23 @@ async function handleTMAISlashCommand(commandText, channelId, userId) {
           // Load template images
           const templateImages = await loadTemplateImages();
 
-          // Generate image
-          const imageBuffer = await generateImageWithGemini(userPrompt, templateImages);
+          // Generate image with specified ratio
+          const imageBuffer = await generateImageWithGemini(prompt, templateImages, ratio);
 
           // Save image
-          const savedImage = await saveGeneratedImage(imageBuffer, userPrompt);
+          const savedImage = await saveGeneratedImage(imageBuffer, prompt);
+
+          // Create title and comment
+          const title = `TMAI ${prompt} (${ratio})`;
+          const comment = `✨ Generated TMAI ${prompt} with ${ratio} aspect ratio`;
 
           // Upload image to Slack thread
           await slackClient.files.uploadV2({
             channel_id: channelId,
             file: imageBuffer,
             filename: savedImage.filename,
-            title: `TMAI ${userPrompt}`,
-            initial_comment: `✨ Generated TMAI ${userPrompt}`,
+            title: title,
+            initial_comment: comment,
             thread_ts: threadTs
           });
         });
@@ -310,46 +550,15 @@ fastify.get('/health', async (request, reply) => {
   };
 });
 
-// Image generation endpoint (for testing)
-fastify.post('/generate', async (request, reply) => {
-  try {
-    const { prompt } = request.body;
-
-    if (!prompt) {
-      return reply.code(400).send({ error: 'Prompt is required' });
-    }
-
-    // Load template images
-    const templateImages = await loadTemplateImages();
-
-    // Generate image
-    const imageBuffer = await generateImageWithGemini(prompt, templateImages);
-
-    // Save image
-    const savedImage = await saveGeneratedImage(imageBuffer, prompt);
-
-    return {
-      success: true,
-      image: savedImage,
-      prompt: prompt
-    };
-
-  } catch (error) {
-    fastify.log.error('Error in generate endpoint:', error);
-    return reply.code(500).send({
-      error: 'Failed to generate image',
-      details: error.message
-    });
-  }
-});
 
 // Slack slash command endpoint
 fastify.post('/image-gen', async (request, reply) => {
   try {
+
     const { command, text, channel_id, user_id, response_url } = request.body;
 
     // Verify this is our command
-    if (command !== '/tmai') {
+    if (!['/tmai', '/test-tmai'].includes(command)) {
       return reply.code(400).send({ error: 'Unknown command' });
     }
 
@@ -368,6 +577,32 @@ fastify.post('/image-gen', async (request, reply) => {
   }
 });
 
+// Ian Balina generation endpoint
+fastify.post('/ian-gen', async (request, reply) => {
+  try {
+
+    const { command, text, channel_id, user_id, response_url } = request.body;
+
+    // Verify this is our command
+    if (!['/ian', '/test-ian'].includes(command)) {
+      return reply.code(400).send({ error: 'Unknown command' });
+    }
+
+    // Handle the command
+    const result = await handleIanSlashCommand(text, channel_id, user_id);
+
+    // Return response to Slack
+    return reply.code(200).send(result);
+
+  } catch (error) {
+    fastify.log.error('Error processing Ian slash command:', error);
+    return reply.code(500).send({
+      text: '❌ An error occurred while processing your Ian command.',
+      response_type: 'ephemeral'
+    });
+  }
+});
+
 
 // Start server
 const start = async () => {
@@ -378,7 +613,8 @@ const start = async () => {
     await fastify.listen({ port, host });
     fastify.log.info(`🚀 Server listening on http://${host}:${port}`);
     fastify.log.info(`🎯 Target Channel: ${fastify.config.TARGET_CHANNEL}`);
-    fastify.log.info('🎨 Image generation endpoint: /image-gen');
+    fastify.log.info('🤖 TMAI generation endpoint: /image-gen');
+    fastify.log.info('👨‍💼 Ian Balina generation endpoint: /ian-gen');
     fastify.log.info('❤️  Health check: /health');
   } catch (err) {
     fastify.log.error(err);
