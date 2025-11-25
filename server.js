@@ -24,7 +24,7 @@ const fastify = Fastify({
 // Environment configuration schema
 const envSchema = {
   type: 'object',
-  required: ['PORT', 'SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET'],
+  required: ['PORT', 'SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'GEMINI_API_KEY'],
   properties: {
     PORT: { type: 'string', default: '0110' },
     HOST: { type: 'string', default: '0.0.0.0' },
@@ -128,15 +128,14 @@ async function loadIanBalinaImages() {
   }
 }
 
-// Generate image featuring Ian Balina using new Google GenAI SDK
+// Generate image featuring Ian Balina using new Google GenAI SDK with retry logic
 async function generateIanBalinaImage(prompt, ianImages, ratio = "16:9") {
-  try {
-    console.log('🎨 Generating Ian Balina image with Gemini 3 Pro...');
-    console.log(`📝 Prompt: ${prompt}`);
-    console.log(`📐 Ratio: ${ratio}`);
+  console.log('🎨 Generating Ian Balina image with Gemini 3 Pro...');
+  console.log(`📝 Prompt: ${prompt}`);
+  console.log(`📐 Ratio: ${ratio}`);
 
-    // Create enhanced prompt for Ian Balina
-    const enhancedPrompt = `You are a professional designer for Token Metrics, specializing in creating high-quality, brand-consistent visuals featuring Ian Balina, CEO and Founder of Token Metrics.
+  // Create enhanced prompt for Ian Balina
+  const enhancedPrompt = `You are a professional designer for Token Metrics, specializing in creating high-quality, brand-consistent visuals featuring Ian Balina, CEO and Founder of Token Metrics.
 
 User Request: "Ian Balina ${prompt}"
 
@@ -156,14 +155,15 @@ Style Standards:
 - Focus on leadership, expertise, and innovation themes appropriate for a CEO and Founder
 `;
 
-    // Prepare content with Ian Balina image and Token Metrics logo using new SDK format
-    const contents = [
-      bufferToGenerativePart(ianImages.ianBalinaImage, 'image/png'),
-      bufferToGenerativePart(ianImages.tokenMetricsLogo, 'image/png'),
-      { text: enhancedPrompt }
-    ];
+  // Prepare content with Ian Balina image and Token Metrics logo using new SDK format
+  const contents = [
+    bufferToGenerativePart(ianImages.ianBalinaImage, 'image/png'),
+    bufferToGenerativePart(ianImages.tokenMetricsLogo, 'image/png'),
+    { text: enhancedPrompt }
+  ];
 
-    // Generate image using new SDK with gemini-3-pro-image-preview
+  // Define the operation to retry
+  const generateOperation = async () => {
     const response = await geminiClient.models.generateContent({
       model: 'gemini-3-pro-image-preview',
       contents: contents,
@@ -175,22 +175,18 @@ Style Standards:
       }
     });
 
-    console.log('✅ Ian Balina image generation completed');
-
     // Extract image data from new SDK response format
     for (const part of response.candidates[0].content.parts) {
       if (part.inlineData) {
-        console.log('✅ Image data extracted from response');
         return Buffer.from(part.inlineData.data, 'base64');
       }
     }
 
     throw new Error('No image data found in response');
+  };
 
-  } catch (error) {
-    console.error('❌ Error generating Ian Balina image:', error.message);
-    throw error;
-  }
+  // Execute with retry logic
+  return await retryWithBackoff(generateOperation, 5, 1000);
 }
 
 // Parse flags from user prompt for Ian Balina commands
@@ -321,15 +317,48 @@ async function handleIanSlashCommand(commandText, channelId, userId) {
   }
 }
 
-// Generate image using new Google GenAI SDK
-async function generateImageWithGemini(prompt, templateImages, ratio = "16:9") {
-  try {
-    console.log('🎨 Generating mascot image with Gemini 3 Pro...');
-    console.log(`📝 Prompt: ${prompt}`);
-    console.log(`📐 Ratio: ${ratio}`);
+// Retry function with exponential backoff
+async function retryWithBackoff(operation, maxRetries = 5, baseDelay = 1000) {
+  let lastError;
 
-    // Create enhanced prompt
-    const enhancedPrompt = `
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔄 Attempt ${attempt}/${maxRetries} for image generation...`);
+      const result = await operation();
+      console.log(`✅ Success on attempt ${attempt}`);
+      return result;
+    } catch (error) {
+      lastError = error;
+
+      // Check if this is a retryable error
+      const isRetryable = error.message?.includes('overloaded') ||
+                         error.message?.includes('503') ||
+                         error.message?.includes('UNAVAILABLE') ||
+                         error.status === 503;
+
+      if (!isRetryable || attempt === maxRetries) {
+        console.error(`❌ Non-retryable error or max retries reached: ${error.message}`);
+        throw error;
+      }
+
+      // Calculate delay with exponential backoff and jitter
+      const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+      console.log(`⏳ Retrying in ${Math.round(delay)}ms... (Error: ${error.message})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
+
+// Generate image using new Google GenAI SDK with retry logic
+async function generateImageWithGemini(prompt, templateImages, ratio = "16:9") {
+  console.log('🎨 Generating mascot image with Gemini 3 Pro...');
+  console.log(`📝 Prompt: ${prompt}`);
+  console.log(`📐 Ratio: ${ratio}`);
+
+  // Create enhanced prompt
+  const enhancedPrompt = `
 You are a professional designer for Token Metrics, specializing in creating high-quality, brand-consistent visuals for marketing and communications.
 
 User Request: "TMAI ${prompt}"
@@ -354,14 +383,15 @@ Style Standards:
 - Create polished, publication-ready imagery
 `;
 
-    // Prepare content with template images using new SDK format
-    const contents = [
-      bufferToGenerativePart(templateImages.mascotTemplate, 'image/png'),
-      bufferToGenerativePart(templateImages.tokenMetricsLogo, 'image/png'),
-      { text: enhancedPrompt }
-    ];
+  // Prepare content with template images using new SDK format
+  const contents = [
+    bufferToGenerativePart(templateImages.mascotTemplate, 'image/png'),
+    bufferToGenerativePart(templateImages.tokenMetricsLogo, 'image/png'),
+    { text: enhancedPrompt }
+  ];
 
-    // Generate image using new SDK with gemini-3-pro-image-preview
+  // Define the operation to retry
+  const generateOperation = async () => {
     const response = await geminiClient.models.generateContent({
       model: 'gemini-3-pro-image-preview',
       contents: contents,
@@ -373,22 +403,18 @@ Style Standards:
       }
     });
 
-    console.log('✅ Image generation completed');
-
     // Extract image data from new SDK response format
     for (const part of response.candidates[0].content.parts) {
       if (part.inlineData) {
-        console.log('✅ Image data extracted from response');
         return Buffer.from(part.inlineData.data, 'base64');
       }
     }
 
     throw new Error('No image data found in response');
+  };
 
-  } catch (error) {
-    console.error('❌ Error generating image:', error.message);
-    throw error;
-  }
+  // Execute with retry logic
+  return await retryWithBackoff(generateOperation, 5, 1000);
 }
 
 // Save generated image
