@@ -317,14 +317,24 @@ async function handleIanSlashCommand(commandText, channelId, userId) {
   }
 }
 
-// Retry function with exponential backoff
-async function retryWithBackoff(operation, maxRetries = 5, baseDelay = 1000) {
+// Retry function with exponential backoff and timeout
+async function retryWithBackoff(operation, maxRetries = 5, baseDelay = 1000, timeoutMs = 120000) {
   let lastError;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       console.log(`🔄 Attempt ${attempt}/${maxRetries} for image generation...`);
-      const result = await operation();
+
+      // Add timeout wrapper
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Request timeout after 120 seconds')), timeoutMs);
+      });
+
+      const result = await Promise.race([
+        operation(),
+        timeoutPromise
+      ]);
+
       console.log(`✅ Success on attempt ${attempt}`);
       return result;
     } catch (error) {
@@ -334,7 +344,10 @@ async function retryWithBackoff(operation, maxRetries = 5, baseDelay = 1000) {
       const isRetryable = error.message?.includes('overloaded') ||
                          error.message?.includes('503') ||
                          error.message?.includes('UNAVAILABLE') ||
+                         error.message?.includes('Request timeout') ||
                          error.status === 503;
+
+      console.log(`❌ Attempt ${attempt} failed: ${error.message}`);
 
       if (!isRetryable || attempt === maxRetries) {
         console.error(`❌ Non-retryable error or max retries reached: ${error.message}`);
