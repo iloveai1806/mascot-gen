@@ -24,7 +24,7 @@ const fastify = Fastify({
 // Environment configuration schema
 const envSchema = {
   type: 'object',
-  required: ['PORT', 'SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'GEMINI_API_KEY'],
+  required: ['PORT', 'SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET'],
   properties: {
     PORT: { type: 'string', default: '0110' },
     HOST: { type: 'string', default: '0.0.0.0' },
@@ -32,7 +32,6 @@ const envSchema = {
     SLACK_BOT_TOKEN: { type: 'string' },
     SLACK_SIGNING_SECRET: { type: 'string' },
     SLACK_APP_TOKEN: { type: 'string' },
-    GEMINI_API_KEY: { type: 'string' },
     TARGET_CHANNEL: { type: 'string', default: 'C08BW4X3VMX' },
     OUTPUT_DIR: { type: 'string', default: './generated-images' },
     MAX_IMAGE_SIZE: { type: 'string', default: '2048' }
@@ -58,8 +57,15 @@ await fastify.register(staticPlugin, {
 // Initialize Slack client
 const slackClient = new WebClient(fastify.config.SLACK_BOT_TOKEN);
 
-// Initialize Gemini client
-const geminiClient = new GoogleGenAI({ apiKey: fastify.config.GEMINI_API_KEY });
+// Set service account key environment variable for Vertex AI
+process.env.GOOGLE_APPLICATION_CREDENTIALS = './gemini-model-access-9f2d25140070.json';
+
+// Initialize Vertex AI Gemini client
+const geminiClient = new GoogleGenAI({
+  vertexai: true,
+  project: 'gemini-model-access',
+  location: 'us-central1'
+});
 
 
 // Simple concurrency tracking
