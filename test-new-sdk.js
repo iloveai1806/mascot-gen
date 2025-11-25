@@ -29,9 +29,14 @@ const testPrompts = [
   }
 ];
 
-// Initialize new Google GenAI client
+// Set service account key environment variable for Vertex AI
+process.env.GOOGLE_APPLICATION_CREDENTIALS = './gemini-model-access-9f2d25140070.json';
+
+// Initialize Vertex AI Gemini client
 const ai = new GoogleGenAI({
-  apiKey: GEMINI_API_KEY
+  vertexai: true,
+  project: 'gemini-model-access',
+  location: 'us-central1'
 });
 
 // Load template images (mascot + logo)
@@ -100,9 +105,9 @@ Style Standards:
       { text: enhancedPrompt }
     ];
 
-    // Generate image using new SDK with gemini-3-pro-image-preview
+    // Generate image using new SDK with gemini-3-pro-image
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
+      model: 'gemini-3-pro-image',
       contents: contents,
       generationConfig: {
         responseModalities: ['Image'],

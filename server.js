@@ -57,15 +57,8 @@ await fastify.register(staticPlugin, {
 // Initialize Slack client
 const slackClient = new WebClient(fastify.config.SLACK_BOT_TOKEN);
 
-// Set service account key environment variable for Vertex AI
-process.env.GOOGLE_APPLICATION_CREDENTIALS = './gemini-model-access-9f2d25140070.json';
-
-// Initialize Vertex AI Gemini client
-const geminiClient = new GoogleGenAI({
-  vertexai: true,
-  project: 'gemini-model-access',
-  location: 'us-central1'
-});
+// Initialize Gemini client
+const geminiClient = new GoogleGenAI({ apiKey: fastify.config.GEMINI_API_KEY });
 
 
 // Simple concurrency tracking
