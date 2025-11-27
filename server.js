@@ -63,8 +63,9 @@ const slackClient = new WebClient(fastify.config.IMAGE_SLACK_BOT_TOKEN); // For 
 const tmaiClient = new WebClient(fastify.config.TMAI_SLACK_BOT_TOKEN); // For TMAI slash commands
 
 // Log which tokens are being used
-fastify.log.info('🔑 IMAGE_SLACK_BOT_TOKEN starts with:', fastify.config.IMAGE_SLACK_BOT_TOKEN?.substring(0, 10) + '...');
-fastify.log.info('🔑 TMAI_SLACK_BOT_TOKEN starts with:', fastify.config.TMAI_SLACK_BOT_TOKEN?.substring(0, 10) + '...');
+fastify.log.info('🔑 IMAGE_SLACK_BOT_TOKEN exists:', !!fastify.config.IMAGE_SLACK_BOT_TOKEN);
+fastify.log.info('🔑 TMAI_SLACK_BOT_TOKEN exists:', !!fastify.config.TMAI_SLACK_BOT_TOKEN);
+fastify.log.info('🔑 All env vars loaded:', Object.keys(fastify.config));
 
 // Initialize Gemini client
 const geminiClient = new GoogleGenAI({ apiKey: fastify.config.GEMINI_API_KEY });
@@ -835,8 +836,8 @@ fastify.get('/health', async (request, reply) => {
 fastify.post('/slack/image', async (request, reply) => {
   try {
     fastify.log.info('=== Events API webhook hit (using IMAGE_SLACK_BOT_TOKEN) ===');
-    fastify.log.info('📨 Request type:', request.body.type);
-    fastify.log.info('📨 Event type:', request.body.event?.type);
+    fastify.log.info('📨 Request type:', request.body.type || 'MISSING');
+    fastify.log.info('📨 Event type:', request.body.event?.type || 'MISSING');
 
     // Slack sends URL verification challenge when setting up webhook
     if (request.body.type === 'url_verification') {
@@ -867,9 +868,15 @@ fastify.post('/slack/image', async (request, reply) => {
       }
 
       const event = request.body.event;
-      fastify.log.info('📝 Event channel:', event.channel);
-      fastify.log.info('📝 Event user:', event.user);
-      fastify.log.info('📝 Event text:', event.text);
+      fastify.log.info('📝 Event exists:', !!event);
+
+      if (!event) {
+        throw new Error('Event object is missing from request body');
+      }
+
+      fastify.log.info('📝 Event channel:', event.channel || 'MISSING');
+      fastify.log.info('📝 Event user:', event.user || 'MISSING');
+      fastify.log.info('📝 Event text:', event.text || 'MISSING');
 
       eventId = `${event.channel}_${event.user}_${event.event_ts}`;
       fastify.log.info('🆔 Generated eventId:', eventId);
