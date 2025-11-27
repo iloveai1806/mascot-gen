@@ -25,13 +25,15 @@ const fastify = Fastify({
 // Environment configuration schema
 const envSchema = {
   type: 'object',
-  required: ['PORT', 'IMAGE_SLACK_BOT_TOKEN', 'IMAGE_SLACK_SIGNING_SECRET', 'GEMINI_API_KEY', 'IMAGE_SLACK_BOT_USER_ID'],
+  required: ['PORT', 'IMAGE_SLACK_BOT_TOKEN', 'IMAGE_SLACK_SIGNING_SECRET', 'TMAI_SLACK_BOT_TOKEN', 'TMAI_SLACK_SIGNING_SECRET', 'GEMINI_API_KEY', 'IMAGE_SLACK_BOT_USER_ID'],
   properties: {
     PORT: { type: 'string', default: '0110' },
     HOST: { type: 'string', default: '0.0.0.0' },
     LOG_LEVEL: { type: 'string', default: 'info' },
     IMAGE_SLACK_BOT_TOKEN: { type: 'string' },
     IMAGE_SLACK_SIGNING_SECRET: { type: 'string' },
+    TMAI_SLACK_BOT_TOKEN: { type: 'string' },
+    TMAI_SLACK_SIGNING_SECRET: { type: 'string' },
     IMAGE_SLACK_BOT_USER_ID: { type: 'string' },
     TARGET_CHANNEL: { type: 'string', default: 'C08BW4X3VMX' },
     OUTPUT_DIR: { type: 'string', default: './generated-images' },
@@ -56,7 +58,9 @@ await fastify.register(staticPlugin, {
 });
 
 // Initialize Slack client
-const slackClient = new WebClient(fastify.config.IMAGE_SLACK_BOT_TOKEN);
+// Separate Slack clients for different bots
+const slackClient = new WebClient(fastify.config.IMAGE_SLACK_BOT_TOKEN); // For Events API mentions
+const tmaiClient = new WebClient(fastify.config.TMAI_SLACK_BOT_TOKEN); // For TMAI slash commands
 
 // Initialize Gemini client
 const geminiClient = new GoogleGenAI({ apiKey: fastify.config.GEMINI_API_KEY });
@@ -747,7 +751,7 @@ async function handleTMAISlashCommand(commandText, channelId, userId) {
     // Get user info for personalized response
     let userName = 'there';
     try {
-      const userInfo = await slackClient.users.info({ user: userId });
+      const userInfo = await tmaiClient.users.info({ user: userId });
       userName = userInfo.user?.real_name || userInfo.user?.name || 'there';
     } catch (error) {
       // Continue with default name if user lookup fails
@@ -783,7 +787,7 @@ async function handleTMAISlashCommand(commandText, channelId, userId) {
           const comment = `✨ Generated TMAI ${prompt} with ${ratio} aspect ratio`;
 
           // Upload image to Slack thread
-          await slackClient.files.uploadV2({
+          await tmaiClient.files.uploadV2({
             channel_id: channelId,
             file: imageBuffer,
             filename: savedImage.filename,
@@ -793,7 +797,7 @@ async function handleTMAISlashCommand(commandText, channelId, userId) {
           });
         });
       } catch (error) {
-        await slackClient.chat.postMessage({
+        await tmaiClient.chat.postMessage({
           channel: channelId,
           text: `❌ ${error.message}`,
           thread_ts: threadTs
