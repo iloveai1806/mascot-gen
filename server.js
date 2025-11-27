@@ -830,10 +830,15 @@ fastify.post('/slack/image', async (request, reply) => {
 
     // Slack sends URL verification challenge when setting up webhook
     if (request.body.type === 'url_verification') {
-      fastify.log.info('🔗 Responding to Slack URL verification challenge');
-      return {
+      fastify.log.info('🔗 Slack URL verification request received');
+      fastify.log.info('🔗 Challenge value:', request.body.challenge);
+
+      const response = {
         challenge: request.body.challenge
       };
+
+      fastify.log.info('🔗 Sending verification response:', response);
+      return response;
     }
 
     // Handle app_mention events only - ignore all other event types
