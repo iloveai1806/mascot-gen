@@ -835,6 +835,7 @@ fastify.get('/health', async (request, reply) => {
 fastify.post('/slack/image', async (request, reply) => {
   try {
     fastify.log.info('=== Events API webhook hit (using IMAGE_SLACK_BOT_TOKEN) ===');
+    fastify.log.info('📨 Raw request body:', JSON.stringify(request.body, null, 2));
 
     // Slack sends URL verification challenge when setting up webhook
     if (request.body.type === 'url_verification') {
@@ -865,7 +866,10 @@ fastify.post('/slack/image', async (request, reply) => {
       }
 
       const event = request.body.event;
+      fastify.log.info('📝 Event object:', JSON.stringify(event, null, 2));
+
       eventId = `${event.channel}_${event.user}_${event.event_ts}`;
+      fastify.log.info('🆔 Generated eventId:', eventId);
 
       // Skip if we've already processed this event
       if (processedEvents.has(eventId)) {
