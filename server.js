@@ -857,7 +857,7 @@ fastify.post('/slack/image', async (request, reply) => {
       }
 
       const event = request.body.event;
-      const eventId = `${event.channel}_${event.user}_${event.event_ts}`;
+      eventId = `${event.channel}_${event.user}_${event.event_ts}`;
 
       // Skip if we've already processed this event
       if (processedEvents.has(eventId)) {
