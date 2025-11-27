@@ -62,6 +62,10 @@ await fastify.register(staticPlugin, {
 const slackClient = new WebClient(fastify.config.IMAGE_SLACK_BOT_TOKEN); // For Events API mentions
 const tmaiClient = new WebClient(fastify.config.TMAI_SLACK_BOT_TOKEN); // For TMAI slash commands
 
+// Log which tokens are being used
+fastify.log.info('🔑 IMAGE_SLACK_BOT_TOKEN starts with:', fastify.config.IMAGE_SLACK_BOT_TOKEN?.substring(0, 10) + '...');
+fastify.log.info('🔑 TMAI_SLACK_BOT_TOKEN starts with:', fastify.config.TMAI_SLACK_BOT_TOKEN?.substring(0, 10) + '...');
+
 // Initialize Gemini client
 const geminiClient = new GoogleGenAI({ apiKey: fastify.config.GEMINI_API_KEY });
 
@@ -830,7 +834,7 @@ fastify.get('/health', async (request, reply) => {
 // Events API webhook endpoint for app mentions
 fastify.post('/slack/image', async (request, reply) => {
   try {
-    fastify.log.info('=== Events API webhook hit ===');
+    fastify.log.info('=== Events API webhook hit (using IMAGE_SLACK_BOT_TOKEN) ===');
 
     // Slack sends URL verification challenge when setting up webhook
     if (request.body.type === 'url_verification') {
@@ -1046,9 +1050,11 @@ fastify.post('/slack/image', async (request, reply) => {
     return { ok: true };
 
   } catch (error) {
-    fastify.log.error('Error in Events API webhook:', error.message);
-    fastify.log.error('Full error details:', error);
+    fastify.log.error('Error in Events API webhook:', error.message || error);
+    fastify.log.error('Full error details:', JSON.stringify(error, null, 2));
     fastify.log.error('Stack trace:', error.stack);
+    fastify.log.error('Error name:', error.name);
+    fastify.log.error('Error code:', error.code);
     return reply.code(500).send({ error: 'Webhook processing failed' });
   }
 });
@@ -1057,7 +1063,7 @@ fastify.post('/slack/image', async (request, reply) => {
 // TMAI slash command endpoint
 fastify.post('/tmai-gen', async (request, reply) => {
   try {
-    fastify.log.info('=== /tmai-gen endpoint hit ===');
+    fastify.log.info('=== /tmai-gen endpoint hit (using TMAI_SLACK_BOT_TOKEN) ===');
     fastify.log.info('Request body:', JSON.stringify(request.body, null, 2));
 
     const { command, text, channel_id, user_id, response_url } = request.body;
@@ -1090,6 +1096,7 @@ fastify.post('/tmai-gen', async (request, reply) => {
 // Ian Balina generation endpoint
 fastify.post('/ian-gen', async (request, reply) => {
   try {
+    fastify.log.info('=== /ian-gen endpoint hit (using TMAI_SLACK_BOT_TOKEN) ===');
 
     const { command, text, channel_id, user_id, response_url } = request.body;
 
