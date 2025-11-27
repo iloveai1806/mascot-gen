@@ -20,35 +20,26 @@ const OUTPUT_DIR = './test-images';
 // Test prompts for experimentation
 const testPrompts = [
   {
-    prompt: "TMAI hugs the DOGE coin logo",
-    description: "DOGE coin hug theme"
-  },
-  {
-    prompt: "TMAI shakes hands with Elon Musk",
-    description: "Elon Musk handshake theme"
+    prompt: "regenerate this image exactly as-is, except, remove the sparkle logo on the bottom right corner of the image and the generate in 16:9 ratio",
+    description: "Exact regeneration of Gemini generated image"
   }
 ];
 
-// Set service account key environment variable for Vertex AI
-process.env.GOOGLE_APPLICATION_CREDENTIALS = './gemini-model-access-9f2d25140070.json';
-
-// Initialize Vertex AI Gemini client
+// Initialize new Google GenAI client
 const ai = new GoogleGenAI({
-  vertexai: true,
-  project: 'gemini-model-access',
-  location: 'us-central1'
+  apiKey: GEMINI_API_KEY
 });
 
-// Load template images (mascot + logo)
+// Load template images (Gemini generated image + logo)
 async function loadTemplateImages() {
   try {
-    const mascotTemplate = await readFile(path.join(__dirname, 'mascot-template.png'));
+    const geminiGeneratedImage = await readFile(path.join(__dirname, 'Gemini_Generated_Image_fosx9xfosx9xfosx.png'));
     const tokenMetricsLogo = await readFile(path.join(__dirname, 'TM_logo_primary_white.png'));
 
     console.log('✅ Template images loaded successfully');
 
     return {
-      mascotTemplate,
+      geminiGeneratedImage,
       tokenMetricsLogo
     };
   } catch (error) {
@@ -100,14 +91,13 @@ Style Standards:
 
     // Prepare content with template images using new SDK format
     const contents = [
-      bufferToGenerativePart(templateImages.mascotTemplate, 'image/png'),
-      bufferToGenerativePart(templateImages.tokenMetricsLogo, 'image/png'),
+      bufferToGenerativePart(templateImages.geminiGeneratedImage, 'image/png'),
       { text: enhancedPrompt }
     ];
 
-    // Generate image using new SDK with gemini-3-pro-image
+    // Generate image using new SDK with gemini-3-pro-image-preview
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image',
+      model: 'gemini-3-pro-image-preview',
       contents: contents,
       generationConfig: {
         responseModalities: ['Image'],
