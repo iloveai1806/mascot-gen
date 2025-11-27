@@ -41,10 +41,16 @@ const envSchema = {
   }
 };
 
+// Resolve .env path explicitly so Fastify env loads correctly
+const envPath = path.join(__dirname, '.env');
+
 // Register plugins
 await fastify.register(env, {
   schema: envSchema,
-  dotenv: true
+  dotenv: {
+    path: envPath,
+    debug: true
+  }
 });
 
 await fastify.register(cors);
@@ -57,15 +63,28 @@ await fastify.register(staticPlugin, {
   prefix: '/images/'
 });
 
+// Helper to log token presence without leaking secrets
+const describeToken = (label, token) => token
+  ? `${label}: present (len=${token.length}, last4=${token.slice(-4)})`
+  : `${label}: MISSING`;
+
 // Initialize Slack client
 // Separate Slack clients for different bots
 const slackClient = new WebClient(fastify.config.IMAGE_SLACK_BOT_TOKEN); // For Events API mentions
 const tmaiClient = new WebClient(fastify.config.TMAI_SLACK_BOT_TOKEN); // For TMAI slash commands
 
-// Log which tokens are being used
-fastify.log.info('🔑 IMAGE_SLACK_BOT_TOKEN exists:', !!fastify.config.IMAGE_SLACK_BOT_TOKEN);
-fastify.log.info('🔑 TMAI_SLACK_BOT_TOKEN exists:', !!fastify.config.TMAI_SLACK_BOT_TOKEN);
-fastify.log.info('🔑 All env vars loaded:', Object.keys(fastify.config));
+// Log which tokens are being used (without leaking full secrets)
+fastify.log.info(
+  `🔑 Env loaded from ${envPath} | ${describeToken('IMAGE_SLACK_BOT_TOKEN', fastify.config.IMAGE_SLACK_BOT_TOKEN)} | ${describeToken('TMAI_SLACK_BOT_TOKEN', fastify.config.TMAI_SLACK_BOT_TOKEN)} | IMAGE_SLACK_BOT_USER_ID: ${!!fastify.config.IMAGE_SLACK_BOT_USER_ID}`
+);
+
+// Debug: Show what environment variables are actually available
+fastify.log.debug({
+  hasPort: !!process.env.PORT,
+  hasImageToken: !!process.env.IMAGE_SLACK_BOT_TOKEN,
+  hasTmaiToken: !!process.env.TMAI_SLACK_BOT_TOKEN,
+  keys: Object.keys(process.env).filter(key => key.includes('SLACK') || key.includes('GEMINI') || key === 'PORT')
+}, 'Env presence debug');
 
 // Initialize Gemini client
 const geminiClient = new GoogleGenAI({ apiKey: fastify.config.GEMINI_API_KEY });
@@ -393,7 +412,7 @@ async function handleFreeFormGeneration(requestBody) {
     // Get user info for personalized response
     let userName = 'there';
     try {
-      const userInfo = await slackClient.users.info({ user: userId });
+      const userInfo = await tmaiClient.users.info({ user: userId });
       userName = userInfo.user?.real_name || userInfo.user?.name || 'there';
     } catch (error) {
       // Continue with default name if user lookup fails
@@ -401,7 +420,7 @@ async function handleFreeFormGeneration(requestBody) {
 
     // Get random working message
     const workingMessage = getRandomWorkingMessage();
-    const randomMessage = `Hang on ${userName}... ${workingMessage} your image...`;
+    const randomMessage = `Hang on ${userName}... ${workingMessage}...`;
 
     // Return immediate response acknowledging the command
     const response = await slackClient.chat.postMessage({
@@ -501,7 +520,7 @@ function parseIanPromptWithFlags(commandText) {
 // Handle slash command /ian
 async function handleIanSlashCommand(commandText, channelId, userId) {
   try {
-    fastify.log.info('Received /ian command:', { commandText, channelId, userId });
+    fastify.log.debug('Received /ian command:', { commandText, channelId, userId });
 
     // Parse prompt and flags
     const { prompt, ratio } = parseIanPromptWithFlags(commandText);
@@ -527,7 +546,7 @@ async function handleIanSlashCommand(commandText, channelId, userId) {
     const randomMessage = `Hang on ${userName}... ${workingMessage}...`;
 
     // Return immediate response acknowledging the command
-    const response = await slackClient.chat.postMessage({
+    const response = await tmaiClient.chat.postMessage({
       channel: channelId,
       text: randomMessage
     });
@@ -552,7 +571,7 @@ async function handleIanSlashCommand(commandText, channelId, userId) {
           const comment = `✨ Generated Ian Balina ${prompt} with ${ratio} aspect ratio`;
 
           // Upload image to Slack thread
-          await slackClient.files.uploadV2({
+          await tmaiClient.files.uploadV2({
             channel_id: channelId,
             file: imageBuffer,
             filename: savedImage.filename,
@@ -562,7 +581,7 @@ async function handleIanSlashCommand(commandText, channelId, userId) {
           });
         });
       } catch (error) {
-        await slackClient.chat.postMessage({
+        await tmaiClient.chat.postMessage({
           channel: channelId,
           text: `❌ ${error.message}`,
           thread_ts: threadTs
@@ -741,7 +760,7 @@ function parsePromptWithFlags(commandText) {
 // Handle slash command /tmai
 async function handleTMAISlashCommand(commandText, channelId, userId) {
   try {
-    fastify.log.info('Received /tmai command:', { commandText, channelId, userId });
+    fastify.log.debug('Received /tmai command:', { commandText, channelId, userId });
 
     // Parse prompt and flags
     const { prompt, ratio } = parsePromptWithFlags(commandText);
@@ -767,7 +786,7 @@ async function handleTMAISlashCommand(commandText, channelId, userId) {
     const randomMessage = `Hang on ${userName}... ${workingMessage}...`;
 
     // Return immediate response acknowledging the command
-    const response = await slackClient.chat.postMessage({
+    const response = await tmaiClient.chat.postMessage({
       channel: channelId,
       text: randomMessage
     });
@@ -836,8 +855,25 @@ fastify.get('/health', async (request, reply) => {
 fastify.post('/slack/image', async (request, reply) => {
   try {
     fastify.log.info('=== Events API webhook hit (using IMAGE_SLACK_BOT_TOKEN) ===');
-    fastify.log.info('📨 Request type:', request.body.type || 'MISSING');
-    fastify.log.info('📨 Event type:', request.body.event?.type || 'MISSING');
+
+    // Debug raw request data (only at debug level to reduce noise)
+    fastify.log.debug({
+      headers: Object.keys(request.headers),
+      bodyType: typeof request.body,
+      bodyKeys: request.body ? Object.keys(request.body) : 'NULL BODY',
+      fullBody: request.body
+    }, 'Events API request envelope');
+
+    // Verify token configuration
+    fastify.log.debug({
+      hasImageToken: !!fastify.config.IMAGE_SLACK_BOT_TOKEN,
+      botUserId: fastify.config.IMAGE_SLACK_BOT_USER_ID
+    }, 'Events API token debug');
+
+    fastify.log.debug({
+      requestType: request.body.type || 'MISSING',
+      eventType: request.body.event?.type || 'MISSING'
+    }, 'Events API types');
 
     // Slack sends URL verification challenge when setting up webhook
     if (request.body.type === 'url_verification') {
@@ -855,11 +891,11 @@ fastify.post('/slack/image', async (request, reply) => {
     // Handle app_mention events only - ignore all other event types
     if (request.body.type === 'event_callback') {
       const eventType = request.body.event.type;
-      const eventId = request.body.event_id;
+      const incomingEventId = request.body.event_id;
       const eventTime = request.body.event_time;
 
       // Log ALL event types for debugging
-      fastify.log.info(`📩 Event received: ${eventType} (ID: ${eventId}, Time: ${eventTime})`);
+      fastify.log.info(`📩 Event received: ${eventType} (ID: ${incomingEventId}, Time: ${eventTime})`);
 
       // Only process app_mention events, ignore everything else
       if (eventType !== 'app_mention') {
@@ -868,27 +904,31 @@ fastify.post('/slack/image', async (request, reply) => {
       }
 
       const event = request.body.event;
-      fastify.log.info('📝 Event exists:', !!event);
+      fastify.log.debug('📝 Event object exists:', !!event);
+      fastify.log.debug('📝 Event type:', typeof event);
 
       if (!event) {
         throw new Error('Event object is missing from request body');
       }
 
-      fastify.log.info('📝 Event channel:', event.channel || 'MISSING');
-      fastify.log.info('📝 Event user:', event.user || 'MISSING');
-      fastify.log.info('📝 Event text:', event.text || 'MISSING');
+      // Safe property access with detailed debugging
+      fastify.log.debug('📝 Event keys:', Object.keys(event));
+      fastify.log.debug('📝 Event channel:', event?.channel || 'MISSING');
+      fastify.log.debug('📝 Event user:', event?.user || 'MISSING');
+      fastify.log.debug('📝 Event text:', event?.text || 'MISSING');
+      fastify.log.debug('🆔 Incoming event_id:', incomingEventId);
 
-      eventId = `${event.channel}_${event.user}_${event.event_ts}`;
-      fastify.log.info('🆔 Generated eventId:', eventId);
+      const dedupId = `${event.channel}_${event.user}_${event.event_ts}`;
+      fastify.log.debug('🆔 Generated dedupId:', dedupId);
 
       // Skip if we've already processed this event
-      if (processedEvents.has(eventId)) {
-        fastify.log.info('🔄 Skipping duplicate event:', eventId);
+      if (processedEvents.has(dedupId)) {
+        fastify.log.debug('🔄 Skipping duplicate event:', dedupId);
         return { ok: true };
       }
 
       // Mark this event as processed
-      processedEvents.add(eventId);
+      processedEvents.add(dedupId);
 
       // Clean up old events (keep only last 100)
       if (processedEvents.size > 100) {
@@ -901,17 +941,19 @@ fastify.post('/slack/image', async (request, reply) => {
       const text = event.text;
       const files = event.files;
 
-      fastify.log.info('📝 App mention received:');
-      fastify.log.info('  User:', user);
-      fastify.log.info('  Channel:', channel);
-      fastify.log.info('  Text:', text);
-      fastify.log.info('  Files:', files ? files.length : 0, 'files attached');
+      fastify.log.info({
+        user,
+        channel,
+        hasFiles: !!(files && files.length),
+        textLength: text ? text.length : 0,
+        dedupId
+      }, 'Processing app_mention');
 
       // DEBUG: Log the full event to see what's actually being sent
-      fastify.log.info('🔍 DEBUG - Full event object:', JSON.stringify(event, null, 2));
-      fastify.log.info('🔍 DEBUG - Event type:', event.type);
-      fastify.log.info('🔍 DEBUG - Event text:', JSON.stringify(text));
-      fastify.log.info('🔍 DEBUG - Does text contain bot mention?', text.includes(fastify.config.IMAGE_SLACK_BOT_USER_ID));
+      fastify.log.debug('🔍 Full event object:', JSON.stringify(event, null, 2));
+      fastify.log.debug('🔍 Event type:', event.type);
+      fastify.log.debug('🔍 Event text:', JSON.stringify(text));
+      fastify.log.debug('🔍 Does text contain bot mention?', text.includes(fastify.config.IMAGE_SLACK_BOT_USER_ID));
 
       // SAFETY CHECK: If critical fields are empty, skip processing
       if (!user || !channel || !text || text.trim().length === 0) {
@@ -933,16 +975,6 @@ fastify.post('/slack/image', async (request, reply) => {
           channel: channel,
           thread_ts: event.ts,
           text: `❌ Please include a description for what you want me to do with your image(s)!`
-        });
-        return { ok: true };
-      }
-
-      // Validate that images are attached - Events API requires images!
-      if (!files || files.length === 0) {
-        await slackClient.chat.postMessage({
-          channel: channel,
-          thread_ts: event.ts,
-          text: `❌ Please include image(s) with your mention!\n\nExample: @bot Make this look professional --ratio 16:9 [+ attach image(s)]\n\n💡 The Events API requires image attachments to work!`
         });
         return { ok: true };
       }
@@ -1012,7 +1044,7 @@ fastify.post('/slack/image', async (request, reply) => {
       }
 
       const workingMessage = getRandomWorkingMessage();
-      const randomMessage = `🎨 ${workingMessage} your image, ${userName}...`;
+      const randomMessage = `👇🏼 ${workingMessage}, ${userName}...`;
 
       const response = await slackClient.chat.postMessage({
         channel: channel,
@@ -1026,18 +1058,19 @@ fastify.post('/slack/image', async (request, reply) => {
       setTimeout(async () => {
         try {
           await processWithConcurrencyLimit(async () => {
-            // Events API should only work with attached images
             if (attachedImages.length === 0) {
-              throw new Error('No images were successfully processed. Please try again.');
+              fastify.log.debug({ dedupId, channel, user }, 'No attachments provided; generating from text only');
             }
 
-            // Generate with attached images only (free-form mode)
+            // Generate with or without attached images (free-form mode)
             const imageBuffer = await generateFreeFormImage(prompt, attachedImages, ratio);
 
             // Save and upload
             const savedImage = await saveGeneratedImage(imageBuffer, prompt);
             const title = `AI Generated: ${prompt} (${ratio})`;
-            const comment = `✨ Generated image from your prompt and ${attachedImages.length} attached image(s)`;
+            const comment = attachedImages.length > 0
+              ? `✨ Generated image from your prompt and ${attachedImages.length} attached image(s)`
+              : '✨ Generated image from your prompt';
 
             await slackClient.files.uploadV2({
               channel_id: channel,
@@ -1049,6 +1082,15 @@ fastify.post('/slack/image', async (request, reply) => {
             });
           });
         } catch (error) {
+          fastify.log.error('❌ Async mention processing failed', {
+            error: error.message,
+            stack: error.stack,
+            dedupId,
+            channel,
+            user,
+            ratio,
+            attachedImages: attachedImages.length
+          });
           await slackClient.chat.postMessage({
             channel: channel,
             text: `❌ Sorry, I encountered an error generating your image: ${error.message}`,
@@ -1064,11 +1106,8 @@ fastify.post('/slack/image', async (request, reply) => {
     return { ok: true };
 
   } catch (error) {
-    fastify.log.error('Error in Events API webhook:', error.message || error);
-    fastify.log.error('Full error details:', JSON.stringify(error, null, 2));
-    fastify.log.error('Stack trace:', error.stack);
-    fastify.log.error('Error name:', error.name);
-    fastify.log.error('Error code:', error.code);
+    fastify.log.error('Error processing Events API webhook:', error);
+    fastify.log.error('Request body was:', JSON.stringify(request.body, null, 2));
     return reply.code(500).send({ error: 'Webhook processing failed' });
   }
 });
@@ -1078,12 +1117,11 @@ fastify.post('/slack/image', async (request, reply) => {
 fastify.post('/tmai-gen', async (request, reply) => {
   try {
     fastify.log.info('=== /tmai-gen endpoint hit (using TMAI_SLACK_BOT_TOKEN) ===');
-    fastify.log.info('Request body:', JSON.stringify(request.body, null, 2));
+    fastify.log.debug({ body: request.body }, 'TMAI slash raw body');
 
     const { command, text, channel_id, user_id, response_url } = request.body;
 
-    fastify.log.info('TMAI - Parsed command:', command);
-    fastify.log.info('TMAI - Parsed text:', text);
+    fastify.log.info({ command, channel: channel_id, user: user_id }, 'TMAI slash command received');
 
     // Verify this is our command
     if (!['/tmai', '/test-tmai'].includes(command)) {
@@ -1111,8 +1149,11 @@ fastify.post('/tmai-gen', async (request, reply) => {
 fastify.post('/ian-gen', async (request, reply) => {
   try {
     fastify.log.info('=== /ian-gen endpoint hit (using TMAI_SLACK_BOT_TOKEN) ===');
+    fastify.log.debug({ body: request.body }, 'Ian slash raw body');
 
     const { command, text, channel_id, user_id, response_url } = request.body;
+
+    fastify.log.info({ command, channel: channel_id, user: user_id }, 'Ian slash command received');
 
     // Verify this is our command
     if (!['/ian', '/test-ian'].includes(command)) {

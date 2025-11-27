@@ -40,7 +40,7 @@ export const WORKING_MESSAGES = [
   `Musing`,
   `Noodling`,
   `Percolating`,
-  `Photosynthesizing`, // You mentioned this one!
+  `Photosynthesizing`,
   `Pondering`,
   `Processing`,
   `Puttering`,
@@ -52,7 +52,7 @@ export const WORKING_MESSAGES = [
   `Smooshing`,
   `Spinning`,
   `Stewing`,
-  `Synthesizing`, // You mentioned this one too!
+  `Synthesizing`,
   `Thinking`,
   `Transmuting`,
   `Vibing`,
